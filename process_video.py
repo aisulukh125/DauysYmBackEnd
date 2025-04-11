@@ -6,10 +6,20 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Layer
 from tensorflow.keras.utils import register_keras_serializable
-import pocketbase
 
-# Initialize PocketBase
-pb = pocketbase.PocketBase("https://dauys.pockethost.io/")
+import os
+from supabase import create_client, Client
+from dotenv import load_dotenv
+from urllib.parse import urlparse
+
+# Load environment variables
+load_dotenv()
+# Load Supabase credentials
+SUPABASE_URL = os.getenv("REACT_APP_SUPABASE_URL")
+SUPABASE_KEY = os.getenv("REACT_APP_SUPABASE_SERVICE_KEY")
+# Initialize Supabase client    
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 # Register Attention Layer for Model Loading
 @register_keras_serializable()
@@ -43,18 +53,29 @@ holistic = mp_holistic.Holistic()
 FRAME_COUNT = 30  # Expected number of frames per sequence
 NUM_KEYPOINTS = 1662  # Number of features per frame
 
-# === VIDEO DOWNLOADING ===
-def download_video(video_id, filename="sign_video.mp4"):
-    """Download video from PocketBase and save it locally."""
-    video_entry = pb.collection("videos").get_one(video_id)
-    video_url = f"https://dauys.pockethost.io/api/files/videos/{video_entry.id}/{video_entry.file}"
-    
-    response = requests.get(video_url)
+def download_video(recognition_id, filename="sign_video.mp4"):
+    """Download video from Supabase Storage based on video_url in recognition table."""
+    # Fetch recognition row from Supabase
+    response = supabase.table("recognition").select("video_url").eq("id", recognition_id).single().execute()
+
+    if not response.data:
+        raise Exception(f"❌ Failed to fetch video info")
+
+    video_url = response.data["video_url"]
+
+    print(f"🌐 Video URL: {video_url}")
+
+    # Download the video from the URL
+    res = requests.get(video_url)
+    if res.status_code != 200:
+        raise Exception(f"❌ Failed to download video. HTTP {res.status_code}")
+
     with open(filename, "wb") as f:
-        f.write(response.content)
-    
-    print(f"✅ Downloaded video: {filename}")
+        f.write(res.content)
+
+    print(f"✅ Downloaded video to: {filename}")
     return filename
+
 
 # === FRAME PROCESSING ===
 def extract_keypoints_from_frame(frame):
@@ -127,23 +148,33 @@ def process_video(video_path):
     return predicted_label
 
 # === UPDATE DATABASE ===
-def update_pocketbase(video_id, prediction):
-    """Update PocketBase with the predicted sign language gesture."""
-    pb.collection("videos").update(video_id, {
+def update_recognition_status(recognition_id, prediction):
+    """Update Supabase recognition table with prediction and set status to completed."""
+    response = supabase.table("recognition").update({
         "status": "completed",
-        "predictedSign": prediction
-    })
-    print(f"✅ Updated PocketBase with prediction: {prediction}")
+        "gesture": prediction
+    }).eq("id", recognition_id).execute()
+
+    if response.error:
+        raise Exception(f"❌ Failed to update recognition entry: {response.error.message}")
+
+    print(f"✅ Supabase updated with gesture: {prediction}")
 
 # ==== MAIN EXECUTION ====
 if __name__ == "__main__":
-    # Fetch the latest video with status = "pending"
-    pending_videos = pb.collection("videos").get_list(1, 10, {"filter": 'status="pending"'})
+    # Fetch latest pending recognition entries
+    response = supabase.table("recognition").select("*").eq("status", "pending").limit(10).execute()
 
-    for video in pending_videos.items:
-        video_id = video.id
-        print(f"🔄 Processing video ID: {video_id}")
+    if not response.data:
+        raise Exception(f"❌ Failed to fetch pending videos")
 
-        video_path = download_video(video_id)
+    pending_entries = response.data
+
+    for entry in pending_entries:
+        recognition_id = entry["id"]
+        video_url = entry["video_url"]
+        print(f"🔄 Processing recognition ID: {recognition_id}")
+
+        video_path = download_video(video_url)
         prediction = process_video(video_path)
-        update_pocketbase(video_id, prediction)
+        update_recognition_status(recognition_id, prediction)
