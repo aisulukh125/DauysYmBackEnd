@@ -30,7 +30,6 @@ supabase==2.15.0
 supafunc==0.9.4
 tensorflow==2.18.0
 tensorflow-hub==0.12.0
-tensorflow_intel==2.18.0
 tensorflowjs==3.18.0
 tf-estimator-nightly==2.16.0.dev2024012409
 tf_keras==2.18.0
